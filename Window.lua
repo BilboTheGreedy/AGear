@@ -6,7 +6,8 @@ local Window = {}
 ns.Window = Window
 
 local frame
-local state = { tab = "character", group = "ALL", type = "ALL", level = 60 }
+local state = { tab = "character", group = "ALL", type = "ALL", level = "MINE", view = "slots" }
+local PER_SLOT = 5
 local QUESTION = "Interface\\Icons\\INV_Misc_QuestionMark"
 
 local QUALITY = {
@@ -44,6 +45,35 @@ local function characterRows()
 	return rows
 end
 
+local GROUPSLOTS = {
+	Head = { 1 }, Neck = { 2 }, Shoulder = { 3 }, Back = { 15 }, Chest = { 5 }, Wrist = { 9 }, Hands = { 10 },
+	Waist = { 6 }, Legs = { 7 }, Feet = { 8 }, Ring = { 11, 12 }, Trinket = { 13, 14 }, Weapon = { 16 },
+	["Off hand"] = { 17 }, Ranged = { 18 },
+}
+
+local function myLevel()
+	local level = UnitLevel and UnitLevel("player")
+	if type(level) ~= "number" or level < 1 then return 60 end
+	return level
+end
+
+local function wornText(group)
+	local parts = {}
+	for _, slot in ipairs(GROUPSLOTS[group] or {}) do
+		local item = ns.Equipped(slot)
+		if item then
+			local info = ns.ItemInfo(item)
+			local score = ns.Score(item)
+			local text = info and info.name or "?"
+			if info and info.ilvl then text = text .. " (" .. info.ilvl .. ")" end
+			if score then text = text .. string.format(" %.1f", score) end
+			parts[#parts + 1] = text
+		end
+	end
+	if #parts == 0 then return "nothing equipped" end
+	return table.concat(parts, "   ")
+end
+
 local function upgradeRows()
 	local Up = ns.Upgrades
 	if not Up.Available() then
@@ -54,7 +84,32 @@ local function upgradeRows()
 		Up.started = true
 		Up.Start()
 	end
-	local rows = Up.Rows({ group = state.group, type = state.type, level = state.level })
+	local level = state.level
+	if level == "MINE" then level = myLevel() end
+	local found = Up.Rows({ group = state.group, type = state.type, level = level })
+	local rows = found
+	if state.view == "slots" then
+		rows = {}
+		local by = {}
+		for _, r in ipairs(found) do
+			by[r.group] = by[r.group] or {}
+			table.insert(by[r.group], r)
+		end
+		for _, g in ipairs(ns.GROUPS) do
+			if g[1] ~= "ALL" and (state.group == "ALL" or state.group == g[1]) then
+				local list = by[g[1]]
+				rows[#rows + 1] = { kind = "slothead", text = g[2], worn = wornText(g[1]), count = list and #list or 0 }
+				if list then
+					for i = 1, math.min(PER_SLOT, #list) do rows[#rows + 1] = list[i] end
+					if #list > PER_SLOT then
+						rows[#rows + 1] = { kind = "more", group = g[1], text = "   " .. (#list - PER_SLOT) .. " more for this slot" }
+					end
+				else
+					rows[#rows + 1] = { kind = "note", text = "   Nothing better found for this slot.", dim = true }
+				end
+			end
+		end
+	end
 	if Up.running then
 		table.insert(rows, 1, { kind = "note", text = "Scoring items " .. Up.progress .. " / " .. Up.total, dim = true })
 	elseif Up.missing > 0 then
@@ -62,6 +117,10 @@ local function upgradeRows()
 	end
 	if #rows == 0 then rows[1] = { kind = "note", text = "No upgrades match these filters." } end
 	return rows
+end
+
+function Window.State()
+	return state
 end
 
 local function weightRows()
@@ -124,6 +183,12 @@ local function createRow(list)
 	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	row:SetScript("OnClick", function(self)
 		local d = self.data
+		if d and d.kind == "more" then
+			state.group = d.group
+			state.view = "ranked"
+			Window.Refresh()
+			return
+		end
 		if not d or d.kind ~= "upgrade" or type(ALoot) ~= "table" then return end
 		if IsShiftKeyDown and IsShiftKeyDown() then
 			if type(ALoot.WishToggle) == "function" then
@@ -172,7 +237,19 @@ local function updateRow(row, d)
 		local info = ns.ItemInfo(d.id)
 		itemText(row, info, d.id)
 		local src = d.source ~= "" and ("   " .. d.source) or ""
-		row.right:SetText(string.format("|cff40e640+%.1f|r   %s%s", d.delta, d.group or "", src))
+		local extra = ""
+		if info and info.ilvl then extra = "   ilvl " .. info.ilvl end
+		if (d.minLevel or 0) > myLevel() then extra = extra .. "   |cffff6060needs level " .. d.minLevel .. "|r" end
+		local where = state.view == "slots" and "" or ("   " .. (d.group or ""))
+		row.right:SetText(string.format("|cff40e640+%.1f|r%s%s%s", d.delta, where, extra, src))
+	elseif d.kind == "slothead" then
+		row.text:SetText(d.text)
+		row.text:SetTextColor(C.accent[1], C.accent[2], C.accent[3])
+		row.right:SetText("wearing: " .. d.worn)
+		row.hl:Hide()
+	elseif d.kind == "more" then
+		row.text:SetText(d.text)
+		row.text:SetTextColor(0.55, 0.8, 1)
 	elseif d.kind == "weight" then
 		row.text:SetText(d.label)
 		local c = d.value ~= 0 and C.text or C.dim
@@ -220,7 +297,7 @@ local function setMenu(anchor)
 end
 
 local TABS = { { "character", "Character" }, { "upgrades", "Upgrades" }, { "weights", "Weights" } }
-local LEVELS = { { 60, "Up to level 60" }, { 50, "Up to level 50" }, { 40, "Up to level 40" }, { 30, "Up to level 30" }, { 20, "Up to level 20" } }
+local LEVELS = { { "MINE", "Usable at my level" }, { 60, "Any level" }, { 50, "Up to level 50" }, { 40, "Up to level 40" }, { 30, "Up to level 30" }, { 20, "Up to level 20" } }
 
 local function build()
 	frame = UI.Window("AGearFrame", "AGear", 760, 560, ns.db.window)
@@ -256,11 +333,16 @@ local function build()
 	frame.slotButton:SetPoint("RIGHT", -10, 0)
 	frame.typeButton = UI.Button(tools, "Any source", function(self) pick(self, ns.KINDS, "type") end)
 	frame.typeButton:SetPoint("RIGHT", frame.slotButton, "LEFT", -6, 0)
-	frame.levelButton = UI.Button(tools, "Up to level 60", function(self) pick(self, LEVELS, "level") end)
+	frame.levelButton = UI.Button(tools, "Usable at my level", function(self) pick(self, LEVELS, "level") end)
 	frame.levelButton:SetPoint("RIGHT", frame.typeButton, "LEFT", -6, 0)
+	frame.viewButton = UI.Button(tools, "By slot", function()
+		state.view = state.view == "slots" and "ranked" or "slots"
+		Window.Refresh()
+	end)
+	frame.viewButton:SetPoint("RIGHT", frame.levelButton, "LEFT", -6, 0)
 	frame.resetButton = UI.Button(tools, "Reset to default", function() ns.ResetWeights() end)
 	frame.resetButton:SetPoint("RIGHT", -10, 0)
-	frame.info:SetPoint("RIGHT", frame.levelButton, "LEFT", -8, 0)
+	frame.info:SetPoint("RIGHT", frame.viewButton, "LEFT", -8, 0)
 
 	local list = UI.List(body, 28, createRow, updateRow)
 	list:SetPoint("TOPLEFT", 0, -34)
@@ -280,7 +362,7 @@ function Window.Refresh()
 	local rows, info
 	if state.tab == "upgrades" then
 		rows = upgradeRows()
-		info = "Click: open in ALoot    Shift-click: wishlist"
+		info = "Click: where to get it    Shift-click: wishlist"
 	elseif state.tab == "weights" then
 		rows = weightRows()
 		info = "Score = each stat times its weight. Click a value to type it."
@@ -299,7 +381,9 @@ function Window.Refresh()
 	frame.typeButton:SetLabel(label(ns.KINDS, state.type))
 	frame.typeButton:SetActive(state.type ~= "ALL")
 	frame.levelButton:SetLabel(label(LEVELS, state.level))
-	frame.levelButton:SetActive(state.level ~= 60)
+	frame.levelButton:SetActive(state.level ~= "MINE")
+	frame.viewButton:SetShown(up)
+	frame.viewButton:SetLabel(state.view == "slots" and "By slot" or "Best overall")
 	frame.setButton:SetLabel(ns.ActiveSet().name)
 	frame.info:SetText(info)
 	frame.list:SetData(rows, frame.lastTab == state.tab)
