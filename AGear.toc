@@ -1,0 +1,18 @@
+## Interface: 16001
+## Title: AGear
+## Notes: Scores gear with stat weights and shows upgrades
+## Version: 0.1.0
+## Category: Loot
+## IconTexture: Interface\Icons\INV_Chest_Plate04
+## Dependencies: ACore
+## OptionalDeps: ALoot, AAuction
+## SavedVariables: AGearDB
+## SavedVariablesPerCharacter: AGearCharDB
+
+Core.lua
+Weights.lua
+Stats.lua
+Compare.lua
+Upgrades.lua
+Tooltip.lua
+Window.lua
