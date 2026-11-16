@@ -10,7 +10,7 @@ local charDefaults = {
 	set = false,
 }
 
-ACore.New(ADDON, ns, { db = "AGearDB", defaults = defaults, char = "AGearCharDB", charDefaults = charDefaults })
+ACore.New(ADDON, ns, { db = "AGearDB", defaults = defaults, profile = true, char = "AGearCharDB", charDefaults = charDefaults })
 
 ACore.Register({
 	name = "AGear",
@@ -18,6 +18,7 @@ ACore.Register({
 	slash = "/agear",
 	desc = "gear scores and upgrades",
 	toggle = function() ns.Window.Toggle() end,
+	options = function() return ns.Rewards.Options() end,
 })
 
 AGear = {}

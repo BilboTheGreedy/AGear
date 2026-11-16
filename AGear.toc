@@ -15,4 +15,5 @@ Stats.lua
 Compare.lua
 Upgrades.lua
 Tooltip.lua
+Rewards.lua
 Window.lua
