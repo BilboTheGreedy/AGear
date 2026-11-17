@@ -26,6 +26,11 @@ local API = {
 	ITEM_MOD_MANA_REGENERATION_SHORT = "mp5",
 	ITEM_MOD_POWER_REGEN0_SHORT = "mp5",
 	ITEM_MOD_HEALTH_REGEN_SHORT = "hp5",
+	ITEM_MOD_HEALTH_REGENERATION_SHORT = "hp5",
+	ITEM_MOD_HIT_MELEE_RATING_SHORT = "hit",
+	ITEM_MOD_HIT_RANGED_RATING_SHORT = "hit",
+	ITEM_MOD_CRIT_MELEE_RATING_SHORT = "crit",
+	ITEM_MOD_CRIT_RANGED_RATING_SHORT = "crit",
 	ITEM_MOD_DEFENSE_SKILL_RATING_SHORT = "def",
 	ITEM_MOD_DODGE_RATING_SHORT = "dodge",
 	ITEM_MOD_PARRY_RATING_SHORT = "parry",
@@ -87,30 +92,68 @@ local function tooltipLines(link)
 	return out
 end
 
+local function escape(s)
+	return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"))
+end
+
+local function template(name, fallback)
+	local t = type(_G[name]) == "string" and _G[name] ~= "" and _G[name] or fallback
+	t = escape(t:lower())
+	t = t:gsub("%%%%%d?%$?[sd]", function() return "([%d%.,]+)" end)
+	return t
+end
+
+local function word(name, fallback)
+	local t = type(_G[name]) == "string" and _G[name] ~= "" and _G[name] or fallback
+	return t:lower()
+end
+
+local function whole(v)
+	if not v then return nil end
+	return tonumber((v:gsub("[%.,]", "")))
+end
+
+local function decimal(v)
+	if not v then return nil end
+	return tonumber((v:gsub(",", ".")))
+end
+
+local matchers
+local function build()
+	matchers = {
+		speed = "^" .. escape(word("SPEED", "Speed")) .. " ([%d%.,]+)",
+		armor = "^" .. template("ARMOR_TEMPLATE", "%s Armor") .. "$",
+		block = "^" .. template("SHIELD_BLOCK_TEMPLATE", "%d Block") .. "$",
+		dps = template("DPS_TEMPLATE", "(%s damage per second)"),
+		equip = word("ITEM_SPELL_TRIGGER_ONEQUIP", "Equip:"),
+	}
+	return matchers
+end
+
 local function parse(stats, lines)
 	local found = {}
-	local speedWord = (type(SPEED) == "string" and SPEED or "Speed"):lower()
+	local m = matchers or build()
 	for _, raw in ipairs(lines) do
-		local text = raw:lower():gsub("(%d),(%d)", "%1.%2")
-		local speed = text:match("^" .. speedWord .. " (%d+%.?%d*)")
-		if speed and not stats.speed then stats.speed = tonumber(speed) end
-		if not stats.armor then
-			local armor = text:match("^(%d+) armor$")
-			if armor then found.armor = (found.armor or 0) + tonumber(armor) end
-		end
-		if not stats.dps then
-			local dps = text:match("%((%d+%.?%d*) damage per second%)")
-			if dps then found.dps = tonumber(dps) end
-		end
-		local school, amount = text:match("increases damage done by (%a+) spells and effects by up to (%d+)")
-		if school and SCHOOLS[school] then
-			found[school] = (found[school] or 0) + tonumber(amount)
-		else
-			for _, p in ipairs(PATTERNS) do
-				if text:find(p[1]) then
-					local v = text:match(p[3] or p[1])
-					if tonumber(v) then found[p[2]] = (found[p[2]] or 0) + tonumber(v) end
-					break
+		local text = raw:lower()
+		local speed = decimal(text:match(m.speed))
+		if speed and not stats.speed then stats.speed = speed end
+		local armor = whole(text:match(m.armor))
+		if armor then found.armor = (found.armor or 0) + armor end
+		local block = whole(text:match(m.block))
+		if block then found.blockvalue = (found.blockvalue or 0) + block end
+		local dps = decimal(text:match(m.dps))
+		if dps then found.dps = dps end
+		if text:sub(1, #m.equip) == m.equip then
+			local school, amount = text:match("increases damage done by (%a+) spells and effects by up to (%d+)")
+			if school and SCHOOLS[school] then
+				found[school] = (found[school] or 0) + tonumber(amount)
+			else
+				for _, p in ipairs(PATTERNS) do
+					if text:find(p[1]) then
+						local v = text:match(p[3] or p[1])
+						if tonumber(v) then found[p[2]] = (found[p[2]] or 0) + tonumber(v) end
+						break
+					end
 				end
 			end
 		end
@@ -187,6 +230,12 @@ function ns.Stats(item)
 		end
 	end
 	parse(stats, tooltipLines(link))
+	if GetInstant then
+		local ok, _, _, _, loc = pcall(GetInstant, id)
+		if ok and (loc == "INVTYPE_RANGED" or loc == "INVTYPE_RANGEDRIGHT" or loc == "INVTYPE_THROWN") then
+			stats.rdps, stats.dps, stats.speed = stats.dps, nil, nil
+		end
+	end
 	cache[link] = stats
 	return stats
 end

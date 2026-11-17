@@ -72,7 +72,7 @@ local function rewardButton(kind, index, choices)
 	local frame = QuestInfoRewardsFrame
 	if frame and type(frame.RewardButtons) == "table" then
 		for _, b in ipairs(frame.RewardButtons) do
-			if b.IsShown and b:IsShown() and b.type == kind and b.GetID and b:GetID() == index then return b end
+			if b.IsShown and b:IsShown() and b.type == kind and (b.objectType == nil or b.objectType == "item") and b.GetID and b:GetID() == index then return b end
 		end
 	end
 	local n = kind == "choice" and index or (choices + index)
@@ -87,9 +87,38 @@ local function sellPrice(link)
 	return 0
 end
 
+local function clear()
+	for _, b in pairs(badges) do b:Hide() end
+end
+
+function Rewards.Log()
+	if not ns.db then return end
+	clear()
+	if ns.db.rewards == false or not GetQuestLogItemLink then return end
+	local frame = (QuestInfoFrame and QuestInfoFrame.rewardsFrame) or QuestInfoRewardsFrame
+	if type(frame) ~= "table" or type(frame.RewardButtons) ~= "table" then return end
+	local list = {}
+	local best, bestDelta
+	for _, b in ipairs(frame.RewardButtons) do
+		local kind = b.type
+		if b.IsShown and b:IsShown() and (kind == "choice" or kind == "reward") and (b.objectType == nil or b.objectType == "item") and b.GetID then
+			local ok, link = pcall(GetQuestLogItemLink, kind, b:GetID())
+			if ok and type(link) == "string" and not ns.IsSecret(link) then
+				local v = Rewards.Verdict(link)
+				list[#list + 1] = { button = b, verdict = v, link = link, type = kind }
+				if kind == "choice" and v and v.kind == "up" and (not bestDelta or v.delta > bestDelta) then best, bestDelta = #list, v.delta end
+			end
+		end
+	end
+	for i, e in ipairs(list) do mark(e.button, e.verdict, i == best, false) end
+	return list, best
+end
+
 local announced
 function Rewards.Quest(final)
-	if not ns.db or ns.db.rewards == false then return end
+	if not ns.db then return end
+	clear()
+	if ns.db.rewards == false then return end
 	if not GetQuestItemLink then return end
 	local choices = GetNumQuestChoices and GetNumQuestChoices() or 0
 	local rewards = GetNumQuestRewards and GetNumQuestRewards() or 0
@@ -141,7 +170,13 @@ local function rollFrames()
 		if f then out[#out + 1] = f end
 	end
 	if GroupLootContainer and type(GroupLootContainer.rollFrames) == "table" then
-		for _, f in ipairs(GroupLootContainer.rollFrames) do out[#out + 1] = f end
+		for _, f in pairs(GroupLootContainer.rollFrames) do
+			local have = false
+			for _, o in ipairs(out) do
+				if o == f then have = true end
+			end
+			if not have and type(f) == "table" then out[#out + 1] = f end
+		end
 	end
 	return out
 end
@@ -161,11 +196,12 @@ end
 
 local seen = {}
 function Rewards.Roll(rollID, quiet)
-	if not ns.db or ns.db.rolls == false then return end
-	if not GetLootRollItemLink or not rollID then return end
-	local ok, link = pcall(GetLootRollItemLink, rollID)
-	if not ok or type(link) ~= "string" then return end
-	local v = Rewards.Verdict(link)
+	if not ns.db or not rollID then return end
+	local link, v
+	if ns.db.rolls ~= false and GetLootRollItemLink then
+		local ok, l = pcall(GetLootRollItemLink, rollID)
+		if ok and type(l) == "string" and not ns.IsSecret(l) then link, v = l, Rewards.Verdict(l) end
+	end
 	for _, f in ipairs(rollFrames()) do
 		if f.rollID == rollID then
 			local fs = rollLabel(f)
@@ -192,30 +228,49 @@ end
 function Rewards.Options()
 	local UI = ns.UI
 	local db = ns.db
-	local function on(key)
-		return {
-			text = key[2], checked = db[key[1]] ~= false,
-			func = function() db[key[1]] = db[key[1]] == false end,
-		}
-	end
 	return {
 		{ text = "Upgrade hints", title = true },
 		UI.Check(db, "tooltip", "Score and gain in item tooltips"),
-		on({ "rewards", "Mark upgrades on quest rewards" }),
-		on({ "rewardChat", "Say the best quest reward in chat" }),
-		on({ "rolls", "Mark upgrades on loot rolls" }),
-		on({ "rollChat", "Say roll upgrades in chat" }),
+		UI.Check(db, "rewards", "Mark upgrades on quest rewards and in the quest log"),
+		UI.Check(db, "rewardChat", "Say the best quest reward in chat"),
+		UI.Check(db, "rolls", "Mark upgrades on loot rolls"),
+		UI.Check(db, "rollChat", "Say roll upgrades in chat"),
 	}
 end
 
 ns:On("QUEST_COMPLETE", questSoon)
 ns:On("QUEST_DETAIL", questSoon)
-ns:On("QUEST_ITEM_UPDATE", questSoon)
 ns:On("START_LOOT_ROLL", function(rollID)
 	if type(rollID) ~= "number" then return end
 	ns.After(0.1, function() Rewards.Roll(rollID) end)
 	ns.After(0.8, function() Rewards.Roll(rollID, true) end)
 end)
-ns:On("GET_ITEM_INFO_RECEIVED", function()
-	if QuestFrame and QuestFrame.IsShown and QuestFrame:IsShown() then questSoon() end
+local function logSoon()
+	ns.Debounce("questlog", 0.1, function() Rewards.Log() end)
+end
+
+local function shown(frame)
+	return type(frame) == "table" and frame.IsShown and frame:IsShown() and true or false
+end
+
+local function again()
+	if shown(QuestFrame) then
+		questSoon()
+	elseif QuestInfoFrame and QuestInfoFrame.questLog and shown(QuestInfoFrame.rewardsFrame) then
+		logSoon()
+	end
+end
+
+ns:On("GET_ITEM_INFO_RECEIVED", again)
+ns:On("QUEST_ITEM_UPDATE", again)
+
+ns:Listen("LOGIN", function()
+	if not hooksecurefunc or not QuestInfo_Display then return end
+	pcall(hooksecurefunc, "QuestInfo_Display", function()
+		if QuestInfoFrame and QuestInfoFrame.questLog then
+			logSoon()
+		elseif shown(QuestFrame) then
+			questSoon()
+		end
+	end)
 end)

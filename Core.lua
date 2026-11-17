@@ -2,6 +2,10 @@ local ADDON, ns = ...
 
 local defaults = {
 	tooltip = true,
+	rewards = true,
+	rewardChat = true,
+	rolls = true,
+	rollChat = true,
 	custom = {},
 	window = { scale = 1 },
 }
@@ -32,6 +36,7 @@ SlashCmdList["AGEAR"] = function(msg)
 		ns.Print("tooltip scores " .. (ns.db.tooltip and "on" or "off"))
 	elseif msg == "reset" then
 		ns.db.window.pos = nil
+		ns.db.window.scale = 1
 		ns:Fire("LAYOUT_RESET")
 	elseif msg == "upgrades" or msg == "weights" or msg == "character" then
 		ns.Window.Show(msg)

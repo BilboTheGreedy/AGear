@@ -62,21 +62,70 @@ local WEAPON = {
 	DRUID = { [4] = 1, [5] = 1, [10] = 1, [13] = 1, [15] = 1 },
 }
 
-local DUAL = { WARRIOR = true, ROGUE = true, HUNTER = true }
+local DUAL = { WARRIOR = 20, ROGUE = 10, HUNTER = 20 }
+local LATE = { WARRIOR = true, PALADIN = true, HUNTER = true, SHAMAN = true }
+local RANGED = { INVTYPE_RANGED = true, INVTYPE_RANGEDRIGHT = true, INVTYPE_THROWN = true }
+
+function ns.Level()
+	local level = UnitLevel and UnitLevel("player")
+	if type(level) ~= "number" or ns.IsSecret(level) or level < 1 then return 60 end
+	return level
+end
+
+local ranged
+function ns.RangedSlot()
+	if ranged == nil then
+		ranged = 18
+		if C_PaperDollInfo and C_PaperDollInfo.IsRangedSlotShown then
+			local ok, shown = pcall(C_PaperDollInfo.IsRangedSlotShown)
+			if ok and shown == false then ranged = false end
+		elseif GetInventorySlotInfo then
+			local ok, id = pcall(GetInventorySlotInfo, "RangedSlot")
+			if not ok or type(id) ~= "number" then ranged = false end
+		end
+	end
+	return ranged
+end
+
+local function slotsFor(loc)
+	local slots = LOCSLOTS[loc or ""]
+	if not slots then return nil end
+	if slots[1] == 18 and not ns.RangedSlot() then
+		if RANGED[loc] then return { 16 } end
+		return nil
+	end
+	return slots
+end
+
+local function dual(class)
+	class = class or ns.playerClass
+	local at = DUAL[class]
+	if not at then return false end
+	if class ~= ns.playerClass then return true end
+	if CanDualWield then
+		local ok, can = pcall(CanDualWield)
+		if ok and not ns.IsSecret(can) then return can and true or false end
+	end
+	return ns.Level() >= at
+end
 
 function ns.Usable(info, class)
 	class = class or ns.playerClass
-	if not info or not LOCSLOTS[info.equipLoc or ""] then return false end
+	if not info or not slotsFor(info.equipLoc) then return false end
 	if info.classID == 4 then
 		local sub = info.subclassID or 0
 		if sub == 0 or info.equipLoc == "INVTYPE_CLOAK" then return true end
-		if sub >= 1 and sub <= 4 then return sub <= (ARMOR[class] or 4) end
+		if sub >= 1 and sub <= 4 then
+			local max = ARMOR[class] or 4
+			if LATE[class] and class == ns.playerClass and ns.Level() < 40 and info.minLevel and info.minLevel < 40 then max = max - 1 end
+			return sub <= max
+		end
 		local extra = EXTRA[class]
 		return extra and extra[sub] or false
 	elseif info.classID == 2 then
 		local w = WEAPON[class]
 		if not w then return true end
-		if info.equipLoc == "INVTYPE_WEAPONOFFHAND" and not DUAL[class] then return false end
+		if info.equipLoc == "INVTYPE_WEAPONOFFHAND" and not dual(class) then return false end
 		return w[info.subclassID or -1] ~= nil
 	end
 	return true
@@ -115,6 +164,7 @@ function ns.Compare(item)
 	local score = ns.Score(item)
 	if not score then return nil end
 	if not ns.Usable(info) then return score, nil, nil, nil, false end
+	local slots = slotsFor(info.equipLoc)
 	local loc = info.equipLoc
 	if loc == "INVTYPE_2HWEAPON" then
 		local main, mainItem = slotScore(16)
@@ -122,8 +172,7 @@ function ns.Compare(item)
 		if twoHanded() then off = 0 end
 		return score, score - main - off, 16, mainItem, true
 	end
-	local slots = LOCSLOTS[loc]
-	if loc == "INVTYPE_WEAPON" and DUAL[ns.playerClass] then slots = { 16, 17 } end
+	if loc == "INVTYPE_WEAPON" and dual() then slots = { 16, 17 } end
 	if slots[1] == 17 and twoHanded() then return score, nil, 17, nil, true end
 	local best, bestSlot, bestItem
 	for _, slot in ipairs(slots) do
@@ -159,6 +208,7 @@ local function changed()
 end
 
 ns:On("PLAYER_EQUIPMENT_CHANGED", changed)
+ns:On("PLAYER_LEVEL_UP", changed)
 ns:On("UNIT_INVENTORY_CHANGED", function(unit)
 	if unit == "player" then changed() end
 end)

@@ -21,11 +21,53 @@ local function step(v)
 	return 0.05
 end
 
+function ns.BagUpgrades()
+	local out = {}
+	local num = (C_Container and C_Container.GetContainerNumSlots) or GetContainerNumSlots
+	local get = (C_Container and C_Container.GetContainerItemLink) or GetContainerItemLink
+	if not num or not get then return out end
+	local seen = {}
+	for bag = 0, 4 do
+		local ok, n = pcall(num, bag)
+		for slot = 1, (ok and type(n) == "number" and n) or 0 do
+			local okLink, link = pcall(get, bag, slot)
+			local body = okLink and ns.LinkFor(link)
+			if body and not seen[body] then
+				seen[body] = true
+				local score, delta, where = ns.Compare(link)
+				if score and delta and delta > 0.05 then
+					out[#out + 1] = { kind = "bag", item = link, id = tonumber(body:match("item:(%d+)")), delta = delta, slot = where, info = ns.ItemInfo(link) }
+				end
+			end
+		end
+	end
+	table.sort(out, function(a, b)
+		if a.delta ~= b.delta then return a.delta > b.delta end
+		return (a.id or 0) < (b.id or 0)
+	end)
+	return out
+end
+
+local function equip(d)
+	if InCombatLockdown and InCombatLockdown() then
+		ns.Print("cannot change gear in combat")
+		return
+	end
+	local need = d.info and d.info.minLevel
+	if need and need > ns.Level() then
+		ns.Print("that needs level " .. need)
+		return
+	end
+	local fn = (C_Item and C_Item.EquipItemByName) or EquipItemByName
+	if fn then pcall(fn, d.item, d.slot) end
+end
+
 local function characterRows()
 	local rows = {}
 	local levels = {}
 	for _, s in ipairs(ns.SLOTS) do
 		local item, id = ns.Equipped(s[1])
+		if s[1] == 18 and not ns.RangedSlot() then item, id = nil, nil end
 		local row = { kind = "slot", slot = s[1], label = s[2], item = item, id = id }
 		if item then
 			local info = ns.ItemInfo(item)
@@ -42,6 +84,11 @@ local function characterRows()
 	local total = 0
 	for _, r in ipairs(rows) do total = total + (r.score or 0) end
 	table.insert(rows, 1, { kind = "note", text = ns.ActiveSet().name .. string.format("   total score %.1f", total), accent = true })
+	local bags = ns.BagUpgrades()
+	if #bags > 0 then
+		rows[#rows + 1] = { kind = "note", text = "Upgrades in your bags   (click to equip)", accent = true }
+		for _, b in ipairs(bags) do rows[#rows + 1] = b end
+	end
 	return rows
 end
 
@@ -52,9 +99,7 @@ local GROUPSLOTS = {
 }
 
 local function myLevel()
-	local level = UnitLevel and UnitLevel("player")
-	if type(level) ~= "number" or level < 1 then return 60 end
-	return level
+	return ns.Level()
 end
 
 local function wornText(group)
@@ -136,7 +181,7 @@ local function showTip(row)
 	local d = row.data
 	if not d then return end
 	local item = d.item or d.id
-	if not item or (d.kind ~= "slot" and d.kind ~= "upgrade") then return end
+	if not item or (d.kind ~= "slot" and d.kind ~= "upgrade" and d.kind ~= "bag") then return end
 	GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
 	local link = type(item) == "string" and item or ("item:" .. item)
 	local ok = pcall(GameTooltip.SetHyperlink, GameTooltip, link)
@@ -183,6 +228,10 @@ local function createRow(list)
 	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	row:SetScript("OnClick", function(self)
 		local d = self.data
+		if d and d.kind == "bag" then
+			equip(d)
+			return
+		end
 		if d and d.kind == "more" then
 			state.group = d.group
 			state.view = "ranked"
@@ -233,6 +282,10 @@ local function updateRow(row, d)
 			row.right:SetText(d.label)
 		end
 		row.band:SetShown(d.weak or (not d.item and d.slot ~= 17 and d.slot ~= 18))
+	elseif d.kind == "bag" then
+		itemText(row, d.info, d.id)
+		local need = d.info and d.info.minLevel and d.info.minLevel > ns.Level() and ("   |cffff6060needs level " .. d.info.minLevel .. "|r") or ""
+		row.right:SetText(string.format("|cff40e640+%.1f|r   vs %s%s", d.delta, ns.SLOTNAME[d.slot] or "?", need))
 	elseif d.kind == "upgrade" then
 		local info = ns.ItemInfo(d.id)
 		itemText(row, info, d.id)
@@ -293,6 +346,9 @@ local function setMenu(anchor)
 	end
 	entries[#entries + 1] = { text = "Options", title = true }
 	entries[#entries + 1] = UI.Check(ns.db, "tooltip", "Scores in item tooltips")
+	for _, e in ipairs(UI.ScaleEntries(ns.db.window, function(s) frame:SetScale(s) end)) do
+		entries[#entries + 1] = e
+	end
 	UI.Menu(anchor, entries)
 end
 
@@ -413,6 +469,11 @@ ns:Listen("WEIGHTS", function() Window.Refresh() end)
 ns:Listen("GEAR", function() Window.Refresh() end)
 ns:Listen("ITEMS", function() Window.Refresh() end)
 ns:Listen("UPGRADES", function() Window.Refresh() end)
+ns:On("BAG_UPDATE_DELAYED", function()
+	if frame and frame:IsShown() and state.tab == "character" then
+		ns.Debounce("bags", 0.3, function() Window.Refresh() end)
+	end
+end)
 ns:Listen("LAYOUT_RESET", function()
 	if frame then frame:Restore() end
 end)
